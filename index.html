@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>SteamTimer - 3min Ramen</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#181b22; --text:#eaeef6; --muted:#9aa4b2; --accent:#f5f5f5;
+  }
+  html,body{height:100%;margin:0;background:radial-gradient(1200px 800px at 50% 80%, #1a1e27 0%, #0f1115 60%, #0a0c10 100%); color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;}
+  .wrap{position:fixed; inset:0; display:grid; grid-template-rows:auto 1fr auto;}
+  header, footer{padding:10px 16px; display:flex; align-items:center; gap:8px; background:linear-gradient(180deg, rgba(255,255,255,0.03), transparent);}
+  header h1{font-size:16px; margin:0; font-weight:600; letter-spacing:.02em}
+  .panel{display:flex; align-items:center; gap:8px; flex-wrap:wrap}
+  .btn{appearance:none; border:1px solid #2a2f3a; background:var(--panel); color:var(--text); padding:10px 14px; border-radius:12px; cursor:pointer; transition:.2s transform, .2s background, .2s border-color; font-weight:600; pointer-events:auto}
+  .btn:hover:not(:disabled){transform:translateY(-1px); border-color:#3a4252; background:#1d222b}
+  .btn:active:not(:disabled){transform:translateY(0)}
+  .btn:disabled{opacity:1; cursor:default}
+  .num{min-width:72px; text-align:center; font-variant-numeric: tabular-nums; font-weight:700; background:#141822; padding:8px 10px; border-radius:10px; border:1px solid #232736}
+  .hint{color:var(--muted); font-size:12px}
+  canvas{width:100%; height:100%; display:block}
+  .hud{position:absolute; inset:0; pointer-events:none; display:flex; align-items:center; justify-content:center;}
+  .title{position:absolute; top:18px; left:16px; font-weight:700; color:#dfe5f3; text-shadow:0 2px 10px rgba(0,0,0,.6)}
+  .big{font-size:72px; font-weight:900; letter-spacing:.02em; text-shadow:0 6px 30px rgba(0,0,0,.6); opacity:0; transform:translateY(8px); transition:.6s}
+  .big.show{opacity:1; transform:translateY(0)}
+  .credits{position:absolute; inset:0; display:flex; align-items:flex-end; justify-content:center; padding:10vh 0 6vh; opacity:0; transition:1s}
+  .credits.show{opacity:1}
+  .credits .card{background:rgba(255,255,255,.02); border:1px solid rgba(255,255,255,.08); padding:12px 16px; border-radius:12px; backdrop-filter: blur(6px); font-size:12px; color:#d9dfee}
+  .range{appearance:none; height:8px; border-radius:999px; background:#1e2330; outline:none}
+  .range::-webkit-slider-thumb{appearance:none; width:18px; height:18px; border-radius:50%; background:#e9edf7; border:1px solid #cfd6e6; box-shadow:0 2px 8px rgba(0,0,0,.25)}
+  footer{gap:12px; justify-content:space-between}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+  </header>
+
+  <div style="position:relative">
+    <canvas id="cv"></canvas>
+    <div class="hud">
+      <button class="btn" id="reset" style="position:absolute; top:20px; right:20px; font-size:16px; padding:10px 24px; pointer-events:auto;">Reset</button>
+      <div style="position:absolute; top:15%; left:50%; transform:translateX(-50%); text-align:center;">
+        <h1 style="font-size:48px; margin:0 0 20px 0; font-weight:900; color:#f5f5f5; text-shadow:0 4px 20px rgba(0,0,0,.7)">Foo</h1>
+        <button class="btn" id="start" style="font-size:32px; padding:20px 50px; margin-bottom:20px; min-width:200px; pointer-events:auto;">Start</button>
+        <div style="font-size:28px; font-weight:700; color:#f5f5f5; text-shadow:0 2px 12px rgba(0,0,0,.6); margin-bottom:20px;">
+          スコア: <span id="score">0</span>
+        </div>
+      </div>
+      <div id="big" class="big">いただきます！</div>
+      <div id="credits" class="credits">
+        <div class="card">
+          <div>出演：あなた／湯気</div>
+          <div>協力：お湯・フタ・重し</div>
+          <div>Special Thanks：麺</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+  </footer>
+</div>
+
+<script>
+(() => {
+  const cv = document.getElementById('cv');
+  const g = cv.getContext('2d');
+  const startBtn = document.getElementById('start');
+  const big = document.getElementById('big');
+  const credits = document.getElementById('credits');
+  const scoreEl = document.getElementById('score');
+  const W = () => cv.width = Math.floor(cv.clientWidth * devicePixelRatio);
+  const H = () => cv.height = Math.floor(cv.clientHeight * devicePixelRatio);
+  // 初期リサイズ
+  const resize = () => { W(); H(); };
+  new ResizeObserver(resize).observe(cv);
+
+  // ゲーム状態
+  let score = 0;
+  let mouseX = -999, mouseY = -999;
+  const catchRadius = 60; // キャッチ範囲（ピクセル）
+
+  // タイマー状態
+  let total = 180; // 秒
+  let t = 0;
+  let running = false;
+  let last = 0;
+  let tickHandle = null;
+
+  // パーティクル
+  const ps = [];
+  const rand = (a=1,b=0)=>Math.random()*(a-b)+b;
+  const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  // 擬似ノイズ（位置と時間で揺れる角度を返す）
+  const noise = (x, y, time) => {
+    const s = Math.sin(x*0.003 + time*0.8) + Math.sin(y*0.004 - time*0.5);
+    const c = Math.cos((x+y)*0.002 + time*0.9);
+    return (s + c) * 0.5; // -1..1
+  };
+
+  function spawn(n){
+    const cx = cv.width*0.5, cy = cv.height*0.68;
+    const R = Math.min(cv.width, cv.height)*0.28;
+    const ellipseRatioY = 0.35; // 楕円の縦方向の比率
+    for(let i=0;i<n;i++){
+      // 半円周全体からランダムに出る
+      const ang = rand(Math.PI*0.05, Math.PI*0.95); // 半円周全体（ほぼ0〜180度）
+      const radiusVariation = rand(0.92, 1.02); // 円周付近のバリエーション
+      // 楕円の円周上の座標
+      const x = cx + Math.cos(ang) * R * radiusVariation + rand(-6*devicePixelRatio, 6*devicePixelRatio);
+      const y = cy + Math.sin(ang) * R * ellipseRatioY * radiusVariation + rand(-3*devicePixelRatio, 3*devicePixelRatio);
+      // 大きく拡散する初期速度
+      const spreadAngle = ang + rand(-0.6, 0.6);
+      const speed = rand(1.2, 2.4);
+      ps.push({
+        x, y,
+        vx: Math.cos(spreadAngle) * speed * rand(0.3, 0.8),
+        vy: -Math.abs(Math.sin(spreadAngle)) * speed * rand(0.8, 1.2) - rand(0.5, 1.0),
+        life: rand(1.2, 2.0),
+        age: 0,
+        r: rand(2*devicePixelRatio,5*devicePixelRatio),
+        wob: rand(6,12),
+      });
+    }
+  }
+
+  function drawBowl(){
+    const cx = cv.width*0.5, cy = cv.height*0.68, R = Math.min(cv.width, cv.height)*0.28;
+    const cupHeight = R * 1.8; // カップの高さ
+    const bottomR = R * 0.7; // 底部の半径（上部より狭い）
+
+    // 影
+    g.fillStyle = 'rgba(0,0,0,.3)';
+    g.beginPath();
+    g.ellipse(cx, cy+cupHeight+R*0.1, bottomR*0.95, bottomR*0.25, 0, 0, Math.PI*2);
+    g.fill();
+
+    // カップ本体（白色ベース）
+    g.fillStyle = '#f5f5f5';
+    g.beginPath();
+    // 上部の楕円（手前側）
+    g.ellipse(cx, cy, R, R*0.35, 0, Math.PI, 0);
+    // 右側面
+    g.lineTo(cx+R, cy);
+    g.lineTo(cx+bottomR, cy+cupHeight);
+    // 底部の楕円
+    g.ellipse(cx, cy+cupHeight, bottomR, bottomR*0.28, 0, 0, Math.PI);
+    // 左側面
+    g.lineTo(cx-bottomR, cy+cupHeight);
+    g.lineTo(cx-R, cy);
+    g.closePath();
+    g.fill();
+
+    // 赤いライン（中央に2本）- 楕円の弧で描画
+    g.strokeStyle = '#d42e2e';
+    g.lineWidth = R * 0.06; // 細くする
+
+    // 上側の赤いライン
+    g.beginPath();
+    const midY1 = cy + cupHeight * 0.45;
+    const midR1 = R - (R - bottomR) * 0.45;
+    const midRY1 = midR1 * 0.08;
+    g.ellipse(cx, midY1, midR1 * 0.98, midRY1, 0, Math.PI*0.05, Math.PI*0.95);
+    g.stroke();
+
+    // 下側の赤いライン
+    g.beginPath();
+    const midY2 = cy + cupHeight * 0.55;
+    const midR2 = R - (R - bottomR) * 0.55;
+    const midRY2 = midR2 * 0.08;
+    g.ellipse(cx, midY2, midR2 * 0.98, midRY2, 0, Math.PI*0.05, Math.PI*0.95);
+    g.stroke();
+
+    // カップ上部のフチ
+    g.strokeStyle = '#ddd';
+    g.lineWidth = 2*devicePixelRatio;
+    g.beginPath();
+    g.ellipse(cx, cy, R, R*0.35, 0, Math.PI, 0);
+    g.stroke();
+
+    // 蓋（白色、閉じている）
+    g.fillStyle = '#f8f8f8';
+    g.beginPath();
+    g.ellipse(cx, cy, R*1.05, R*0.38, 0, 0, Math.PI*2);
+    g.fill();
+
+    // 蓋の手前側の影（立体感）
+    g.fillStyle = 'rgba(0,0,0,.08)';
+    g.beginPath();
+    g.ellipse(cx, cy+R*0.02, R*1.03, R*0.36, 0, 0, Math.PI);
+    g.fill();
+
+    // 蓋のフチ
+    g.strokeStyle = '#ccc';
+    g.lineWidth = 2*devicePixelRatio;
+    g.beginPath();
+    g.ellipse(cx, cy, R*1.05, R*0.38, 0, 0, Math.PI*2);
+    g.stroke();
+  }
+
+  function step(dt){
+    // 背景
+    g.clearRect(0,0,cv.width,cv.height);
+
+    // 湯気（後景）ブラーっぽい塗り足し
+    g.globalCompositeOperation = 'source-over';
+    g.fillStyle = 'rgba(255,255,255,0.015)';
+    g.fillRect(0,0,cv.width,cv.height);
+
+    drawBowl();
+
+    // 時間依存パラメータ
+    const remain = clamp(total - t, 0, total);
+    const p = 1 - (remain / total); // 0→1
+    const density = (30 + p*180) * (75/60); // 湯気密度（固定値）
+    const spread = (70/50 + 1.2); // 拡散（固定値）
+
+    // 湯気スポーン
+    if(running){
+      spawn(Math.floor(density * (dt*60)));
+    }
+
+    // 粒子更新 & 描画
+    g.save();
+    g.globalCompositeOperation = 'lighter';
+    for(let i=ps.length-1;i>=0;i--){
+      const o = ps[i];
+      o.age += dt;
+      if(o.age > o.life){ ps.splice(i,1); continue; }
+
+      // キャッチ判定
+      if(running && mouseX > 0 && mouseY > 0){
+        const dx = o.x - mouseX * devicePixelRatio;
+        const dy = o.y - mouseY * devicePixelRatio;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if(dist < catchRadius * devicePixelRatio){
+          score++;
+          scoreEl.textContent = score;
+          ps.splice(i,1);
+          continue;
+        }
+      }
+
+      // 渦（擬似ノイズ）で風向きを曲げる
+      const ang = noise(o.x, o.y, performance.now()/1000)*0.9 * spread;
+      o.vx += Math.cos(ang)*0.02;
+      o.vy += Math.sin(ang)*0.02 - 0.003; // 上昇
+      o.x += o.vx * (1+ p*0.3);
+      o.y += o.vy * (1+ p*0.2);
+      const alpha = (1 - o.age/o.life) * (0.35 + p*0.35);
+      const r = o.r * (1 + o.age*0.6);
+      g.fillStyle = `rgba(240,242,248,${alpha})`;
+      g.beginPath(); g.arc(o.x, o.y, r, 0, Math.PI*2); g.fill();
+    }
+    g.restore();
+
+    // キャッチ範囲の可視化
+    if(running && mouseX > 0 && mouseY > 0){
+      g.save();
+      g.strokeStyle = 'rgba(245,245,245,0.3)';
+      g.lineWidth = 2 * devicePixelRatio;
+      g.beginPath();
+      g.arc(mouseX * devicePixelRatio, mouseY * devicePixelRatio, catchRadius * devicePixelRatio, 0, Math.PI*2);
+      g.stroke();
+      g.restore();
+    }
+
+    // 0秒演出
+    if(remain <= 0){
+      // 全画面に白をふわっと
+      g.fillStyle = 'rgba(255,255,255,0.08)';
+      g.fillRect(0,0,cv.width,cv.height);
+    }
+  }
+
+  function raf(ts){
+    if(!last) last = ts;
+    const dt = Math.min(0.05, (ts - last)/1000);
+    last = ts;
+
+    if(running){
+      t += dt;
+      if(t >= total){
+        t = total;
+        running = false;
+        big.classList.add('show');
+        setTimeout(()=>credits.classList.add('show'), 400);
+      }
+    }
+
+    // スタートボタンのテキストを更新
+    const remainSeconds = Math.max(0, Math.ceil(total - t));
+    if(running || remainSeconds < total) {
+      startBtn.textContent = `${remainSeconds} s`;
+      startBtn.disabled = true;
+      startBtn.style.cursor = 'default';
+    } else {
+      startBtn.textContent = 'Start';
+      startBtn.disabled = false;
+      startBtn.style.cursor = 'pointer';
+    }
+
+    step(dt);
+    tickHandle = requestAnimationFrame(raf);
+  }
+
+  // 初期化
+  resize();
+  startBtn.textContent = 'Start';
+  startBtn.disabled = false;
+  cancelAnimationFrame(tickHandle);
+  tickHandle = requestAnimationFrame(raf);
+
+  // マウス/タッチ追跡
+  const updateMouse = (e) => {
+    const rect = cv.getBoundingClientRect();
+    if(e.touches){
+      mouseX = e.touches[0].clientX - rect.left;
+      mouseY = e.touches[0].clientY - rect.top;
+    } else {
+      mouseX = e.clientX - rect.left;
+      mouseY = e.clientY - rect.top;
+    }
+  };
+  cv.addEventListener('mousemove', updateMouse);
+  cv.addEventListener('touchmove', (e)=>{e.preventDefault(); updateMouse(e);}, {passive:false});
+  cv.addEventListener('mouseleave', ()=>{ mouseX = -999; mouseY = -999; });
+  cv.addEventListener('touchend', ()=>{ mouseX = -999; mouseY = -999; });
+
+  // UI
+  startBtn.addEventListener('click', ()=>{
+    // 終了後の再スタート
+    if(!running && t >= total){
+      t = 0;
+      big.classList.remove('show');
+      credits.classList.remove('show');
+      score = 0;
+      scoreEl.textContent = '0';
+    }
+    // スタート
+    if(!running) {
+      running = true;
+    }
+  });
+
+  document.getElementById('reset').addEventListener('click', ()=>{
+    running = false;
+    t = 0;
+    big.classList.remove('show');
+    credits.classList.remove('show');
+    score = 0;
+    scoreEl.textContent = '0';
+    total = 180; // 3分固定
+    startBtn.textContent = 'Start';
+    startBtn.disabled = false;
+    startBtn.style.cursor = 'pointer';
+  });
+
+})();
+</script>
+</body>
+</html>
