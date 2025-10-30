@@ -135,8 +135,11 @@
         bonusType = Math.random() < 0.5 ? 'blue' : 'red';
         bonusDuration = rand(8, 12); // 8-12秒間
         bonusTimer = 0;
+        console.log('🎉 BONUS START:', bonusType);
         // 既存の湯気をクリアして、すべて新しい色に
+        const oldCount = ps.length;
         ps.length = 0;
+        console.log('Cleared', oldCount, 'old particles, all new particles will be', bonusType);
       }
     }
   }
@@ -319,6 +322,10 @@
     if(bonusActive) {
       bonusMessageEl.style.opacity = '1';
       bonusMessageEl.style.color = bonusType === 'blue' ? '#64b5f6' : '#ff5252';
+      // デバッグ: パーティクルの色を確認
+      if(ps.length > 0 && Math.random() < 0.05) {
+        console.log('Bonus active:', bonusType, 'Sample particle type:', ps[0].type.name, ps[0].type.color);
+      }
     } else {
       bonusMessageEl.style.opacity = '0';
     }
@@ -366,6 +373,11 @@
       const r = o.r * (1 + o.age*0.6) * o.type.sizeMultiplier;
 
       // 色タイプに応じた色で描画（グロー効果削除）
+      // typeが正しく設定されているか確認
+      if(!o.type) {
+        console.error('Particle missing type!', o);
+        o.type = steamTypes[0]; // フォールバック
+      }
       g.fillStyle = `${o.type.color}${alpha})`;
       g.beginPath(); g.arc(o.x, o.y, r, 0, Math.PI*2); g.fill();
     }
