@@ -216,11 +216,6 @@
       // 色タイプを取得
       const steamType = getSteamType();
 
-      // デバッグ: 最初の数個だけログ出力
-      if(ps.length < 3 && bonusActive) {
-        console.log('Creating particle with type:', steamType.name, steamType.color);
-      }
-
       ps.push({
         x, y,
         vx: Math.cos(spreadAngle) * speed * rand(0.3, 0.8),
@@ -371,14 +366,7 @@
       const r = o.r * (1 + o.age*0.6) * o.type.sizeMultiplier;
 
       // 色タイプに応じた色で描画（グロー効果削除）
-      const fillColor = `${o.type.color}${alpha})`;
-
-      // デバッグ: ボーナス中の最初の数個をログ出力
-      if(bonusActive && i === ps.length - 1 && Math.random() < 0.01) {
-        console.log('Drawing particle:', o.type.name, fillColor);
-      }
-
-      g.fillStyle = fillColor;
+      g.fillStyle = `${o.type.color}${alpha})`;
       g.beginPath(); g.arc(o.x, o.y, r, 0, Math.PI*2); g.fill();
     }
     g.restore();
