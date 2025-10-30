@@ -40,10 +40,10 @@
   <div style="position:relative">
     <canvas id="cv"></canvas>
     <div class="hud">
-      <button class="btn" id="reset" style="position:absolute; top:20px; right:20px; font-size:16px; padding:10px 24px; pointer-events:auto;">Reset</button>
+      <button class="btn" id="reset" style="position:absolute; top:20px; right:20px; font-size:16px; padding:10px 24px; pointer-events:auto; z-index:10;">Reset</button>
       <div style="position:absolute; top:15%; left:50%; transform:translateX(-50%); text-align:center;">
         <h1 style="font-size:48px; margin:0 0 20px 0; font-weight:900; color:#f5f5f5; text-shadow:0 4px 20px rgba(0,0,0,.7)">Foo</h1>
-        <button class="btn" id="start" style="font-size:32px; padding:20px 50px; margin-bottom:20px; min-width:200px; pointer-events:auto;">Start</button>
+        <button class="btn" id="start" style="font-size:32px; padding:20px 50px; margin-bottom:20px; min-width:200px; pointer-events:auto; position:relative; z-index:10;">Start</button>
         <div style="font-size:28px; font-weight:700; color:#f5f5f5; text-shadow:0 2px 12px rgba(0,0,0,.6); margin-bottom:20px;">
           スコア: <span id="score">0</span>
         </div>
@@ -93,6 +93,28 @@
   const ps = [];
   const rand = (a=1,b=0)=>Math.random()*(a-b)+b;
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+  // 湯気のホットスポット（多く出る場所）
+  let hotspots = [];
+  let hotspotTimer = 0;
+
+  function updateHotspots(dt) {
+    hotspotTimer += dt;
+    // 2秒ごとにホットスポットを更新
+    if(hotspotTimer > 2) {
+      hotspotTimer = 0;
+      hotspots = [];
+      // 2-4個のホットスポットを生成
+      const numHotspots = Math.floor(rand(2, 5));
+      for(let i = 0; i < numHotspots; i++) {
+        hotspots.push({
+          angle: rand(Math.PI*0.05, Math.PI*0.95),
+          intensity: rand(0.6, 1.0), // 強度
+          radius: rand(0.15, 0.3) // 影響範囲
+        });
+      }
+    }
+  }
   // 擬似ノイズ（位置と時間で揺れる角度を返す）
   const noise = (x, y, time) => {
     const s = Math.sin(x*0.003 + time*0.8) + Math.sin(y*0.004 - time*0.5);
@@ -104,10 +126,32 @@
     const cx = cv.width*0.5, cy = cv.height*0.68;
     const R = Math.min(cv.width, cv.height)*0.28;
     const ellipseRatioY = 0.35; // 楕円の縦方向の比率
-    for(let i=0;i<n;i++){
+
+    // 基本量をランダムに変動（±30%）
+    const randomFactor = rand(0.7, 1.3);
+    const adjustedN = Math.floor(n * randomFactor);
+
+    for(let i=0;i<adjustedN;i++){
       // 半円周全体からランダムに出る
-      const ang = rand(Math.PI*0.05, Math.PI*0.95); // 半円周全体（ほぼ0〜180度）
-      const radiusVariation = rand(0.92, 1.02); // 円周付近のバリエーション
+      let ang = rand(Math.PI*0.05, Math.PI*0.95);
+
+      // ホットスポットの影響を計算
+      let spawnProbability = 0.3; // 基本確率（低め）
+      for(const hotspot of hotspots) {
+        const angleDiff = Math.abs(ang - hotspot.angle);
+        // ホットスポットに近いほど確率が上がる
+        if(angleDiff < hotspot.radius * Math.PI) {
+          const factor = 1 - (angleDiff / (hotspot.radius * Math.PI));
+          spawnProbability += factor * hotspot.intensity * 1.5;
+        }
+      }
+
+      // 確率チェック（ホットスポット以外では少なく）
+      if(hotspots.length > 0 && Math.random() > Math.min(spawnProbability, 1.0)) {
+        continue;
+      }
+
+      const radiusVariation = rand(0.92, 1.02);
       // 楕円の円周上の座標
       const x = cx + Math.cos(ang) * R * radiusVariation + rand(-6*devicePixelRatio, 6*devicePixelRatio);
       const y = cy + Math.sin(ang) * R * ellipseRatioY * radiusVariation + rand(-3*devicePixelRatio, 3*devicePixelRatio);
@@ -211,6 +255,11 @@
 
     drawBowl();
 
+    // ホットスポットを更新
+    if(running) {
+      updateHotspots(dt);
+    }
+
     // 時間依存パラメータ
     const remain = clamp(total - t, 0, total);
     const p = 1 - (remain / total); // 0→1
@@ -292,11 +341,18 @@
 
     // スタートボタンのテキストを更新
     const remainSeconds = Math.max(0, Math.ceil(total - t));
-    if(running || remainSeconds < total) {
+    if(running) {
+      // 実行中はカウント表示で無効化
       startBtn.textContent = `${remainSeconds} s`;
       startBtn.disabled = true;
       startBtn.style.cursor = 'default';
+    } else if(t >= total && t > 0) {
+      // 終了後はカウント表示だが有効化（再スタート可能）
+      startBtn.textContent = `${remainSeconds} s`;
+      startBtn.disabled = false;
+      startBtn.style.cursor = 'pointer';
     } else {
+      // 初期状態またはリセット後
       startBtn.textContent = 'Start';
       startBtn.disabled = false;
       startBtn.style.cursor = 'pointer';
@@ -330,9 +386,17 @@
   cv.addEventListener('touchend', ()=>{ mouseX = -999; mouseY = -999; });
 
   // UI
-  startBtn.addEventListener('click', ()=>{
+  startBtn.addEventListener('click', (e)=>{
+    console.log('Button clicked!', {running, t, total, disabled: startBtn.disabled});
+
+    if(startBtn.disabled) {
+      console.log('Button is disabled, ignoring click');
+      return;
+    }
+
     // 終了後の再スタート
     if(!running && t >= total){
+      console.log('Restarting after completion');
       t = 0;
       big.classList.remove('show');
       credits.classList.remove('show');
@@ -341,7 +405,12 @@
     }
     // スタート
     if(!running) {
+      console.log('Starting timer');
       running = true;
+      // 初期ホットスポットを生成
+      hotspots = [];
+      hotspotTimer = 999; // 強制的に更新させる
+      updateHotspots(0);
     }
   });
 
@@ -356,6 +425,9 @@
     startBtn.textContent = 'Start';
     startBtn.disabled = false;
     startBtn.style.cursor = 'pointer';
+    // ホットスポットもリセット
+    hotspots = [];
+    hotspotTimer = 0;
   });
 
 })();
